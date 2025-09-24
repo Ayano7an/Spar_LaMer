@@ -9,7 +9,7 @@ import time
 
 # ==================== 页面配置 ====================
 st.set_page_config(
-    page_title="La Mer v1.40",
+    page_title="La Mer 基于140发行版的开发尝试",
     page_icon="🌊",
     layout="wide"
 )
@@ -452,28 +452,6 @@ if page == "入库":
     if st.button("✅ 确认入库", type="primary"):
         new_items, products_db, deposit_returns = parse_input_text(processed_text, products_db, deposits_db)
         
-        # 处理押金返还
-        if deposit_returns:
-            for ret in deposit_returns:
-                pfand_items = inventory_df[
-                    (inventory_df['name'].str.contains('Pfand', case=False, na=False)) |
-                    (inventory_df['category'] == 'Pfand')
-                ].head(ret['count'])
-                
-                for _, pfand_item in pfand_items.iterrows():
-                    item_dict = pfand_item.to_dict()
-                    item_dict['checkoutDate'] = ret['date']
-                    item_dict['utilization'] = 100
-                    item_dict['checkoutMode'] = 'pfand_return'
-                    item_dict['daysInService'] = (datetime.strptime(ret['date'], '%Y-%m-%d') - 
-                                                   datetime.strptime(pfand_item['purchaseDate'], '%Y-%m-%d')).days
-                    
-                    history_df = pd.concat([history_df, pd.DataFrame([item_dict])], ignore_index=True)
-                    inventory_df = inventory_df[inventory_df['id'] != pfand_item['id']]
-                    
-                    if pfand_item['name'] in deposits_db:
-                        deposits_db[pfand_item['name']] = max(0, deposits_db[pfand_item['name']] - 1)
-        
         if new_items:
             new_df = pd.DataFrame(new_items)
             inventory_df = pd.concat([inventory_df, new_df], ignore_index=True)
@@ -503,24 +481,14 @@ if page == "入库":
             
             currency_summary = ", ".join([f"{v:.2f} {k}" for k, v in currencies.items()])
             success_msg = f"✅ 入库成功！共 {len(new_items)} 件商品"
-            time.sleep(1)  # 暂停1秒让用户看到消息
+            
             if currencies:
                 success_msg += f"，总计 {currency_summary}"
             if deposit_returns:
                 success_msg += f"\n♻️ 返还 {sum([r['count'] for r in deposit_returns])} 个Pfand"
             
             st.success(success_msg)
-            
-            with st.expander("📋 查看入库明细"):
-                for item in new_items:
-                    st.write(f"• {item['name']} - {item['actualPrice']} {item['currency']} ({item['category']})")
-            
-            st.rerun()
-        elif deposit_returns:
-            save_json(deposits_db, DEPOSITS_JSON)
-            save_csv(inventory_df, INVENTORY_CSV)
-            save_csv(history_df, HISTORY_CSV)
-            st.success(f"♻️ 成功返还 {sum([r['count'] for r in deposit_returns])} 个Pfand")
+            time.sleep(1)  # 需要import time
             st.rerun()
         else:
             st.error("❌ 没有解析到商品")
@@ -641,7 +609,7 @@ elif page == "检视":
                     st.rerun()
             
             with col4:
-                st.write("**删除 / AA款清账**")
+                st.write("**删除 / AA款清账 /退回押金**")
                 st.caption("删除误操作或结清AA款项，相关记录不会计入支出趋势图。")
                 if st.button("🗑️ 删除"):
                     for item_id in selected_items:
@@ -754,6 +722,7 @@ elif page == "订阅管理":
                 save_csv(inventory_df, INVENTORY_CSV)
                 
                 st.success(f"✅ 成功添加 {len(new_subs)} 个订阅服务！")
+                time.sleep(2)  # 需要import time
                 st.rerun()
     
     # 当前订阅列表
