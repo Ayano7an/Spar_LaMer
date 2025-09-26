@@ -404,7 +404,7 @@ if renewed_subs:
 # ==================== UI界面 ====================
 st.sidebar.title("🌊 La Mer v1.40")
 st.sidebar.caption("A pilot project of Spar!")
-page = st.sidebar.radio("导航", ["入库", "检视", "遗失", "订阅管理", "报表", "操作指南"])
+page = st.sidebar.radio("导航", ["入库", "检视", "遗失", "订阅管理", "报表", "产品利用率检视", "操作指南"])
 
 if renewed_subs:
     st.sidebar.success(f"🔄 自动续费: {', '.join(renewed_subs)}")
@@ -1007,6 +1007,229 @@ elif page == "报表":
             st.caption(f"合计: {account_flow.sum():.2f} EUR")
         else:
             st.info("暂无数据")
+
+
+
+# ==================== 产品利用率检视页面 ====================
+elif page == "产品利用率检视":
+    st.header("📊 产品利用率检视")
+    
+    if not history_df.empty:
+        # 筛选出有利用率数据的记录
+        utilization_df = history_df[history_df['utilization'].notna()].copy()
+        
+        if not utilization_df.empty:
+            # 按商品名称分组，计算平均利用率和统计信息
+            utilization_stats = utilization_df.groupby('name').agg({
+                'utilization': ['mean', 'count', 'min', 'max'],
+                'actualPrice': 'mean',
+                'currency': 'first',
+                'category': 'first',
+                'daysInService': 'mean'
+            }).reset_index()
+            
+            # 扁平化列名
+            utilization_stats.columns = [
+                'name', 'avg_utilization', 'count', 'min_utilization', 'max_utilization',
+                'avg_price', 'currency', 'category', 'avg_days'
+            ]
+            
+            # 计算EUR价值（使用最近的汇率）
+            utilization_stats['eur_value'] = utilization_stats.apply(
+                lambda row: to_eur(row['avg_price'], row['currency'], datetime.now().strftime('%Y-%m-%d')),
+                axis=1
+            )
+            
+            # 筛选控件
+            col1, col2, col3 = st.columns([2, 2, 2])
+            
+            with col1:
+                # 利用率范围筛选
+                min_util, max_util = st.slider(
+                    "利用率范围 (%)", 
+                    0, 100, (0, 100),
+                    help="筛选平均利用率在此范围内的商品"
+                )
+            
+            with col2:
+                # 类别筛选
+                categories = ['全部'] + sorted(utilization_stats['category'].unique().tolist())
+                selected_category = st.selectbox("商品类别", categories)
+            
+            with col3:
+                # 排序方式
+                sort_options = {
+                    '平均利用率（降序）': ('avg_utilization', False),
+                    '平均利用率（升序）': ('avg_utilization', True),
+                    '购买次数（降序）': ('count', False),
+                    '平均价格（降序）': ('eur_value', False),
+                    '平均使用天数（降序）': ('avg_days', False)
+                }
+                sort_choice = st.selectbox("排序方式", list(sort_options.keys()))
+                sort_col, sort_asc = sort_options[sort_choice]
+            
+            # 应用筛选
+            filtered_stats = utilization_stats[
+                (utilization_stats['avg_utilization'] >= min_util) &
+                (utilization_stats['avg_utilization'] <= max_util)
+            ].copy()
+            
+            if selected_category != '全部':
+                filtered_stats = filtered_stats[filtered_stats['category'] == selected_category]
+            
+            # 排序
+            filtered_stats = filtered_stats.sort_values(sort_col, ascending=sort_asc)
+            
+            # 显示统计摘要
+            col1, col2, col3, col4 = st.columns(4)
+            
+            with col1:
+                st.metric("商品种类", len(filtered_stats))
+            
+            with col2:
+                overall_avg = filtered_stats['avg_utilization'].mean()
+                st.metric("整体平均利用率", f"{overall_avg:.1f}%")
+            
+            with col3:
+                high_util_count = len(filtered_stats[filtered_stats['avg_utilization'] >= 80])
+                st.metric("高利用率商品(≥80%)", high_util_count)
+            
+            with col4:
+                low_util_count = len(filtered_stats[filtered_stats['avg_utilization'] < 50])
+                st.metric("低利用率商品(<50%)", low_util_count)
+            
+            # 主表格
+            st.subheader("📋 商品利用率详情")
+            
+            # 准备显示数据
+            display_data = filtered_stats.copy()
+            display_data['avg_utilization'] = display_data['avg_utilization'].round(1)
+            display_data['avg_price'] = display_data['avg_price'].round(2)
+            display_data['eur_value'] = display_data['eur_value'].round(2)
+            display_data['avg_days'] = display_data['avg_days'].round(1)
+            
+            # 格式化显示列
+            display_columns = {
+                'name': '商品名称',
+                'category': '类别',
+                'avg_utilization': '平均利用率(%)',
+                'count': '购买次数',
+                'min_utilization': '最低利用率(%)',
+                'max_utilization': '最高利用率(%)',
+                'avg_price': '平均价格',
+                'currency': '币种',
+                'eur_value': '平均价格(EUR)',
+                'avg_days': '平均使用天数'
+            }
+            
+            # 添加利用率颜色标识
+            def style_utilization(val):
+                if pd.isna(val):
+                    return ''
+                if val >= 80:
+                    return 'background-color: #dcfce7; color: #15803d'  # 绿色
+                elif val >= 60:
+                    return 'background-color: #fef3c7; color: #d97706'  # 黄色
+                else:
+                    return 'background-color: #fee2e2; color: #dc2626'  # 红色
+            
+            # 显示表格
+            styled_df = display_data[list(display_columns.keys())].rename(columns=display_columns)
+            
+            # 应用样式
+            styled_table = styled_df.style.applymap(
+                style_utilization, 
+                subset=['平均利用率(%)']
+            ).format({
+                '平均利用率(%)': '{:.1f}',
+                '平均价格': '{:.2f}',
+                '平均价格(EUR)': '{:.2f}',
+                '平均使用天数': '{:.1f}'
+            })
+            
+            st.dataframe(styled_table, use_container_width=True, hide_index=True)
+            
+            # 利用率分布图表
+            st.subheader("📈 利用率分布")
+            
+            # 创建利用率分布直方图
+            fig = go.Figure()
+            
+            fig.add_trace(go.Histogram(
+                x=filtered_stats['avg_utilization'],
+                nbinsx=20,
+                name='商品数量',
+                marker_color='rgba(234, 88, 12, 0.7)',
+                hovertemplate='利用率: %{x:.1f}%<br>商品数量: %{y}<extra></extra>'
+            ))
+            
+            fig.update_layout(
+                title="商品利用率分布",
+                xaxis_title="平均利用率 (%)",
+                yaxis_title="商品数量",
+                height=400,
+                showlegend=False
+            )
+            
+            # 添加平均线
+            fig.add_vline(
+                x=overall_avg, 
+                line_dash="dash", 
+                line_color="red",
+                annotation_text=f"平均: {overall_avg:.1f}%"
+            )
+            
+            st.plotly_chart(fig, use_container_width=True)
+            
+            # 详细商品信息（可展开）
+            with st.expander("🔍 查看详细购买记录"):
+                selected_product = st.selectbox(
+                    "选择商品",
+                    filtered_stats['name'].tolist(),
+                    key="product_detail_select"
+                )
+                
+                if selected_product:
+                    product_records = utilization_df[utilization_df['name'] == selected_product].copy()
+                    product_records = product_records.sort_values('checkoutDate', ascending=False)
+                    
+                    # 显示该商品的所有记录
+                    detail_columns = [
+                        'purchaseDate', 'checkoutDate', 'utilization', 'daysInService',
+                        'actualPrice', 'currency', 'checkoutMode'
+                    ]
+                    
+                    detail_display = {
+                        'purchaseDate': '购买日期',
+                        'checkoutDate': '出库日期',
+                        'utilization': '利用率(%)',
+                        'daysInService': '使用天数',
+                        'actualPrice': '价格',
+                        'currency': '币种',
+                        'checkoutMode': '出库方式'
+                    }
+                    
+                    st.dataframe(
+                        product_records[detail_columns].rename(columns=detail_display),
+                        use_container_width=True,
+                        hide_index=True
+                    )
+                    
+                    # 该商品的统计信息
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.metric("总购买次数", len(product_records))
+                    with col2:
+                        st.metric("平均利用率", f"{product_records['utilization'].mean():.1f}%")
+                    with col3:
+                        st.metric("平均使用天数", f"{product_records['daysInService'].mean():.1f}")
+            
+        else:
+            st.info("暂无已出库且有利用率记录的商品")
+    else:
+        st.info("暂无历史记录")
+
+
 # =========================
 # 指南页面
 # =========================
