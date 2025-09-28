@@ -402,7 +402,7 @@ if renewed_subs:
     save_json(subscriptions_db, SUBSCRIPTIONS_JSON)
 
 # ==================== UI界面 ====================
-st.sidebar.title("🌊 La Mer v1.40")
+st.sidebar.title("🌊 La Mer v1.42")
 st.sidebar.caption("A pilot project of Spar!")
 page = st.sidebar.radio("导航", ["入库", "检视", "遗失", "订阅管理", "报表", "产品利用率检视", "操作指南"])
 
@@ -787,7 +787,9 @@ elif page == "报表":
     trend_view = st.radio("", ["周", "月"], horizontal=True)
     currency = st.selectbox("币种", ['EUR', 'CNY', 'USD', 'JPY'])
 
-    all_items = pd.concat([inventory_df, history_df], ignore_index=True)
+    #all_items = pd.concat([inventory_df, history_df], ignore_index=True)
+    all_items = pd.concat([inventory_df, history_df, lost_df], ignore_index=True)
+
 
     # 计算真实日期和标签
     today = datetime.now().date()
@@ -1242,7 +1244,7 @@ elif page == "操作指南":
     """)
 
 st.sidebar.markdown("---")
-st.sidebar.caption("La Mer v1.40.250923")
+st.sidebar.caption("La Mer v1.42.250926")
 st.sidebar.caption("CREDIT")
 st.sidebar.caption("Designer: 巫獭")
 st.sidebar.caption("Senior Engineer: Claude Pro Sonnet 4")
