@@ -9,7 +9,7 @@ import time
 
 # ==================== 页面配置 ====================
 st.set_page_config(
-    page_title="La Mer 基于140发行版的开发尝试",
+    page_title="La Mer 基于142发行版的开发尝试",
     page_icon="🌊",
     layout="wide"
 )
@@ -543,8 +543,12 @@ elif page == "检视":
         selected_items = st.multiselect(
             "选择商品",
             options=filtered_df['id'].tolist(),
-            format_func=lambda x: filtered_df[filtered_df['id'] == x]['name'].values[0]
+            format_func=lambda x: (
+                f"{filtered_df[filtered_df['id'] == x]['name'].values[0]} "
+                f"[{filtered_df[filtered_df['id'] == x]['purchaseDate'].values[0]}]"
+            )
         )
+
         
         if selected_items:
             col1, col2, col3, col4 = st.columns(4)
@@ -783,16 +787,22 @@ elif page == "报表":
         st.metric("遗失", len(lost_df))
     
 
+    # 替换报表页面中的支出趋势部分
+
     st.subheader("📈 支出趋势")
-    trend_view = st.radio("", ["周", "月"], horizontal=True)
-    currency = st.selectbox("币种", ['EUR', 'CNY', 'USD', 'JPY'])
 
-    all_items = pd.concat([inventory_df, history_df], ignore_index=True)
+    # 视图模式选择
+    view_mode = st.radio("", ["周对比", "月对比"], horizontal=True)
 
-    # 计算真实日期和标签
-    today = datetime.now().date()
+    # 获取所有数据
+    all_items = pd.concat([inventory_df, history_df, lost_df], ignore_index=True)
 
-    if trend_view == "周":
+    if view_mode == "周对比":
+        # ========== 周对比视图 ==========
+        currency = st.selectbox("币种", ['EUR', 'CNY', 'USD', 'JPY'], key="week_currency")
+        
+        today = datetime.now().date()
+        
         # 本周日期（从周一开始）
         week_start = today - timedelta(days=today.weekday())
         current_dates = [week_start + timedelta(days=i) for i in range(7)]
@@ -803,125 +813,261 @@ elif page == "报表":
         
         # 标签显示星期格式
         labels = ['一', '二', '三', '四', '五', '六', '日']
-    else:
-        # 本月日期 - 确保从1号开始
-        month_start = today.replace(day=1)
-        # 计算本月最后一天
-        if month_start.month == 12:
-            next_month_start = month_start.replace(year=month_start.year + 1, month=1)
-        else:
-            next_month_start = month_start.replace(month=month_start.month + 1)
-        month_end = next_month_start - timedelta(days=1)
         
-        # 生成本月所有日期
-        current_dates = []
-        current_date = month_start
-        while current_date <= month_end:
-            current_dates.append(current_date)
-            current_date += timedelta(days=1)
+        # 准备数据数组
+        current_data = [0] * len(current_dates)
+        previous_data = [0] * len(previous_dates)
         
-        # 上月日期
-        prev_month_end = month_start - timedelta(days=1)
-        prev_month_start = prev_month_end.replace(day=1)
-        previous_dates = []
-        current_date = prev_month_start
-        while current_date <= prev_month_end:
-            previous_dates.append(current_date)
-            current_date += timedelta(days=1)
-        
-        # 标签显示日期数字
-        labels = [str(d.day) for d in current_dates]
-
-    # 给表格准备存储y坐标值的数组
-    current_data = [0] * len(current_dates)
-    previous_data = [0] * len(previous_dates)
-
-    # 按真实日期分组数据
-    for _, item in all_items.iterrows():
-        try:
-            item_date = datetime.strptime(str(item['purchaseDate']), '%Y-%m-%d').date()
-            
-            # 计算EUR价值
-            eur_value = to_eur(item['actualPrice'], item['currency'], item['purchaseDate'])
-            if currency != 'EUR':
-                rate = get_exchange_rate(currency, item['purchaseDate'])
-                value = eur_value * rate
-            else:
-                value = eur_value
-            
-            # 分配到对应日期
-            if item_date in current_dates:
-                idx = current_dates.index(item_date)
-                current_data[idx] += value
-            elif item_date in previous_dates:
-                idx = previous_dates.index(item_date)
-                previous_data[idx] += value
+        # 按真实日期分组数据
+        for _, item in all_items.iterrows():
+            try:
+                item_date = datetime.strptime(str(item['purchaseDate']), '%Y-%m-%d').date()
                 
-        except (ValueError, KeyError, TypeError):
-            # 忽略无效的数据行
-            continue
+                # 计算EUR价值
+                eur_value = to_eur(item['actualPrice'], item['currency'], item['purchaseDate'])
+                if currency != 'EUR':
+                    rate = get_exchange_rate(currency, item['purchaseDate'])
+                    value = eur_value * rate
+                else:
+                    value = eur_value
+                
+                # 分配到对应日期
+                if item_date in current_dates:
+                    idx = current_dates.index(item_date)
+                    current_data[idx] += value
+                elif item_date in previous_dates:
+                    idx = previous_dates.index(item_date)
+                    previous_data[idx] += value
+                    
+            except (ValueError, KeyError, TypeError):
+                continue
+        
+        # 计算累计值
+        for i in range(1, len(current_data)):
+            current_data[i] += current_data[i-1]
+        for i in range(1, len(previous_data)):
+            previous_data[i] += previous_data[i-1]
+        
+        # 截取到今天
+        today_idx = -1
+        try:
+            today_idx = current_dates.index(today)
+        except ValueError:
+            today_idx = len(current_dates) - 1
+        
+        current_data_until_today = current_data[:today_idx + 1]
+        labels_until_today = labels[:today_idx + 1]
+        
+        fig = go.Figure()
+        
+        # 本周数据（只到今天）
+        fig.add_trace(go.Scatter(
+            x=list(range(len(labels_until_today))),
+            y=current_data_until_today,
+            line=dict(color='rgb(234, 88, 12)', width=3),
+            mode='lines',
+            name='本周'
+        ))
+        
+        # 上周数据（完整显示）
+        fig.add_trace(go.Scatter(
+            x=list(range(len(labels))),
+            y=previous_data,
+            name='上周',
+            line=dict(color='rgba(251, 146, 60, 0.5)', width=2),
+            mode='lines'
+        ))
+        
+        fig.update_layout(
+            height=400,
+            yaxis_title=f'累计支出 ({currency})',
+            hovermode='x unified',
+            showlegend=True,
+            legend=dict(
+                orientation="h",
+                yanchor="bottom",
+                y=1.02,
+                xanchor="right",
+                x=1
+            ),
+            xaxis=dict(
+                tickmode='array',
+                tickvals=list(range(len(labels))),
+                ticktext=labels,
+                range=[-0.5, len(labels)-0.5]
+            ),
+            margin=dict(l=50, r=50, t=50, b=50)
+        )
+        
+        st.plotly_chart(fig, use_container_width=True)
 
-    # 计算累计值
-    for i in range(1, len(current_data)):
-        current_data[i] += current_data[i-1]
-    for i in range(1, len(previous_data)):
-        previous_data[i] += previous_data[i-1]
+    else:
+        # ========== 月对比视图 ==========
+        if not all_items.empty:
+            # 提取所有月份
+            all_items['month'] = pd.to_datetime(all_items['purchaseDate']).dt.to_period('M')
+            available_months = sorted(all_items['month'].unique(), reverse=True)
+            available_months_str = [str(m) for m in available_months]
+            
+            # 月份选择器
+            col1, col2, col3 = st.columns([2, 2, 2])
+            
+            with col1:
+                # 默认选择本月
+                current_month = pd.Period(datetime.now(), freq='M')
+                default_month1 = str(current_month) if current_month in available_months else available_months_str[0]
+                month1 = st.selectbox("对比月份 1", available_months_str, 
+                                    index=available_months_str.index(default_month1))
+            
+            with col2:
+                # 默认选择上月
+                prev_month = current_month - 1
+                default_month2 = str(prev_month) if prev_month in available_months else (
+                    available_months_str[1] if len(available_months_str) > 1 else available_months_str[0]
+                )
+                month2 = st.selectbox("对比月份 2", available_months_str,
+                                    index=available_months_str.index(default_month2))
+            
+            with col3:
+                currency = st.selectbox("币种", ['EUR', 'CNY', 'USD', 'JPY'], key="month_currency")
+            
+            # 转换选择的月份
+            month1_period = pd.Period(month1)
+            month2_period = pd.Period(month2)
+            
+            # 生成两个月份的日期列表
+            month1_start = month1_period.to_timestamp()
+            month1_end = (month1_period + 1).to_timestamp() - timedelta(days=1)
+            
+            month2_start = month2_period.to_timestamp()
+            month2_end = (month2_period + 1).to_timestamp() - timedelta(days=1)
+            
+            # 生成日期范围
+            month1_dates = []
+            current_date = month1_start.date()
+            while current_date <= month1_end.date():
+                month1_dates.append(current_date)
+                current_date += timedelta(days=1)
+            
+            month2_dates = []
+            current_date = month2_start.date()
+            while current_date <= month2_end.date():
+                month2_dates.append(current_date)
+                current_date += timedelta(days=1)
+            
+            # 标签（日期）
+            labels1 = [str(d.day) for d in month1_dates]
+            labels2 = [str(d.day) for d in month2_dates]
+            
+            # 准备数据数组
+            month1_data = [0] * len(month1_dates)
+            month2_data = [0] * len(month2_dates)
+            
+            # 按日期分组数据
+            for _, item in all_items.iterrows():
+                try:
+                    item_date = datetime.strptime(str(item['purchaseDate']), '%Y-%m-%d').date()
+                    
+                    # 计算EUR价值
+                    eur_value = to_eur(item['actualPrice'], item['currency'], item['purchaseDate'])
+                    if currency != 'EUR':
+                        rate = get_exchange_rate(currency, item['purchaseDate'])
+                        value = eur_value * rate
+                    else:
+                        value = eur_value
+                    
+                    # 分配到对应日期
+                    if item_date in month1_dates:
+                        idx = month1_dates.index(item_date)
+                        month1_data[idx] += value
+                    elif item_date in month2_dates:
+                        idx = month2_dates.index(item_date)
+                        month2_data[idx] += value
+                        
+                except (ValueError, KeyError, TypeError):
+                    continue
+            
+            # 计算累计值
+            for i in range(1, len(month1_data)):
+                month1_data[i] += month1_data[i-1]
+            for i in range(1, len(month2_data)):
+                month2_data[i] += month2_data[i-1]
+            
+            # 截取到今天（仅对当月有效）
+            today = datetime.now().date()
+            
+            if today in month1_dates:
+                today_idx1 = month1_dates.index(today)
+                month1_data_display = month1_data[:today_idx1 + 1]
+                labels1_display = labels1[:today_idx1 + 1]
+            else:
+                month1_data_display = month1_data
+                labels1_display = labels1
+            
+            # 绘制对比图
+            fig = go.Figure()
+            
+            # 月份1数据
+            fig.add_trace(go.Scatter(
+                x=list(range(len(labels1_display))),
+                y=month1_data_display,
+                line=dict(color='rgb(234, 88, 12)', width=3),
+                mode='lines',
+                name=f'{month1}'
+            ))
+            
+            # 月份2数据（完整显示）
+            fig.add_trace(go.Scatter(
+                x=list(range(len(labels2))),
+                y=month2_data,
+                name=f'{month2}',
+                line=dict(color='rgba(251, 146, 60, 0.5)', width=2),
+                mode='lines'
+            ))
+            
+            # 使用较长的那个月份的标签数量
+            max_len = max(len(labels1), len(labels2))
+            all_labels = labels1 if len(labels1) >= len(labels2) else labels2
+            
+            # 更新布局
+            fig.update_layout(
+                height=400,
+                yaxis_title=f'累计支出 ({currency})',
+                xaxis_title='日期',
+                hovermode='x unified',
+                showlegend=True,
+                legend=dict(
+                    orientation="h",
+                    yanchor="bottom",
+                    y=1.02,
+                    xanchor="right",
+                    x=1
+                ),
+                xaxis=dict(
+                    tickmode='array',
+                    tickvals=list(range(len(all_labels))),
+                    ticktext=all_labels,
+                    range=[-0.5, len(all_labels)-0.5]
+                ),
+                margin=dict(l=50, r=50, t=50, b=50)
+            )
+            
+            st.plotly_chart(fig, use_container_width=True)
+            
+            # 显示统计对比
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric(f"{month1} 总支出", f"{month1_data[-1]:.2f} {currency}")
+            with col2:
+                st.metric(f"{month2} 总支出", f"{month2_data[-1]:.2f} {currency}")
+            with col3:
+                diff = month1_data[-1] - month2_data[-1]
+                st.metric("差额", f"{diff:.2f} {currency}", 
+                        delta=f"{diff:.2f}" if diff != 0 else "0")
+        
+        else:
+            st.info("暂无数据")
 
-    # === 绘制折线图，只到今天 ===
-    today_idx = -1
-    try:
-        today_idx = current_dates.index(today)
-    except ValueError:
-        # 如果今天不在当前周期内（比如查看未来月份），显示全部数据
-        today_idx = len(current_dates) - 1
-
-    # 修复：同步截取数据和标签
-    current_data_until_today = current_data[:today_idx + 1]
-    labels_until_today = labels[:today_idx + 1]
-
-    fig = go.Figure()
-
-    # == 本周期数据（只到今天）==
-    fig.add_trace(go.Scatter(
-        x=list(range(len(labels_until_today))),  # 使用索引作为x值
-        y=current_data_until_today,
-        line=dict(color='rgb(234, 88, 12)', width=3), #删除 shape='hv' 属性可以将其改回普通折线图
-        mode='lines',
-        name=f'本{trend_view}'
-    ))
-
-    # == 上个周期数据（完整显示）==
-    fig.add_trace(go.Scatter(
-        x=list(range(len(labels))),  # 使用索引作为x值
-        y=previous_data,
-        name=f'上{trend_view}',
-        line=dict(color='rgba(251, 146, 60, 0.5)', width=2),
-        mode='lines'
-    ))
-
-    # 更新布局
-    fig.update_layout(
-        height=400,
-        yaxis_title=f'累计支出 ({currency})',
-        hovermode='x unified',
-        showlegend=True,
-        legend=dict(
-            orientation="h",
-            yanchor="bottom",
-            y=1.02,
-            xanchor="right",
-            x=1
-        ),
-        xaxis=dict(
-            tickmode='array',
-            tickvals=list(range(len(labels))),
-            ticktext=labels,
-            range=[-0.5, len(labels)-0.5]
-        ),
-        margin=dict(l=50, r=50, t=50, b=50)
-    )
-
-    st.plotly_chart(fig, use_container_width=True)
 
 
     # 账户流水分析
@@ -1242,7 +1388,7 @@ elif page == "操作指南":
     """)
 
 st.sidebar.markdown("---")
-st.sidebar.caption("La Mer v1.42.250926")
+st.sidebar.caption("La Mer: Developing Mode")
 st.sidebar.caption("CREDIT")
 st.sidebar.caption("Designer: 巫獭")
 st.sidebar.caption("Senior Engineer: Claude Pro Sonnet 4")
