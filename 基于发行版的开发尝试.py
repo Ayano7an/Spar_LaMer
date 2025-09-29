@@ -543,8 +543,12 @@ elif page == "检视":
         selected_items = st.multiselect(
             "选择商品",
             options=filtered_df['id'].tolist(),
-            format_func=lambda x: filtered_df[filtered_df['id'] == x]['name'].values[0]
+            format_func=lambda x: (
+                f"{filtered_df[filtered_df['id'] == x]['name'].values[0]} "
+                f"[{filtered_df[filtered_df['id'] == x]['purchaseDate'].values[0]}]"
+            )
         )
+
         
         if selected_items:
             col1, col2, col3, col4 = st.columns(4)
