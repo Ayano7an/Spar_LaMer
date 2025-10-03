@@ -787,6 +787,24 @@ elif page == "报表":
         st.metric("遗失", len(lost_df))
     
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
     # 替换报表页面中的支出趋势部分
 
     st.subheader("📈 支出趋势")
@@ -1067,6 +1085,27 @@ elif page == "报表":
         
         else:
             st.info("暂无数据")
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -1388,7 +1427,7 @@ elif page == "操作指南":
     """)
 
 st.sidebar.markdown("---")
-st.sidebar.caption("La Mer: Developing Mode")
+st.sidebar.caption("La Mer ")
 st.sidebar.caption("CREDIT")
 st.sidebar.caption("Designer: 巫獭")
 st.sidebar.caption("Senior Engineer: Claude Pro Sonnet 4")
