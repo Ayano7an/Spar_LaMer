@@ -13,6 +13,7 @@ st.set_page_config(
     page_icon="🌊",
     layout="wide"
 )
+st.sidebar.title("🌊 La Mer v1.45")
 
 # ==================== 数据文件路径 ====================
 
@@ -402,7 +403,7 @@ if renewed_subs:
     save_json(subscriptions_db, SUBSCRIPTIONS_JSON)
 
 # ==================== UI界面 ====================
-st.sidebar.title("🌊 La Mer v1.42")
+
 st.sidebar.caption("A pilot project of Spar!")
 page = st.sidebar.radio("导航", ["入库", "检视", "遗失", "订阅管理", "报表", "产品利用率检视", "操作指南"])
 
@@ -1427,7 +1428,7 @@ elif page == "操作指南":
     """)
 
 st.sidebar.markdown("---")
-st.sidebar.caption("La Mer ")
+st.sidebar.caption("La Mer")
 st.sidebar.caption("CREDIT")
 st.sidebar.caption("Designer: 巫獭")
 st.sidebar.caption("Senior Engineer: Claude Pro Sonnet 4")

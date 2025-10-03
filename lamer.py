@@ -9,11 +9,11 @@ import time
 
 # ==================== 页面配置 ====================
 st.set_page_config(
-    page_title="La Mer 基于142发行版的开发尝试",
+    page_title="La Mer 1.45",
     page_icon="🌊",
     layout="wide"
 )
-
+st.sidebar.title("🌊 La Mer v1.45")
 # ==================== 数据文件路径 ====================
 
 DATA_DIR = Path("lamer_data")
@@ -402,7 +402,7 @@ if renewed_subs:
     save_json(subscriptions_db, SUBSCRIPTIONS_JSON)
 
 # ==================== UI界面 ====================
-st.sidebar.title("🌊 La Mer v1.42")
+
 st.sidebar.caption("A pilot project of Spar!")
 page = st.sidebar.radio("导航", ["入库", "检视", "遗失", "订阅管理", "报表", "产品利用率检视", "操作指南"])
 
