@@ -9,11 +9,13 @@ import time
 
 # ==================== 页面配置 ====================
 st.set_page_config(
-    page_title="La Mer 1.45",
+    page_title="La Mer 1.46 ",
     page_icon="🌊",
     layout="wide"
 )
-st.sidebar.title("🌊 La Mer v1.45")
+
+st.sidebar.title("🌊 La Mer v1.46")
+
 # ==================== 数据文件路径 ====================
 
 DATA_DIR = Path("lamer_data")
@@ -404,8 +406,7 @@ if renewed_subs:
 # ==================== UI界面 ====================
 
 st.sidebar.caption("A pilot project of Spar!")
-page = st.sidebar.radio("导航", ["入库", "检视", "遗失", "订阅管理", "报表", "产品利用率检视", "操作指南"])
-
+page = st.sidebar.radio("导航", ["入库", "检视", "遗失", "订阅管理", "报表", "利用率检视", "购物清单", "操作指南"])
 if renewed_subs:
     st.sidebar.success(f"🔄 自动续费: {', '.join(renewed_subs)}")
 
@@ -548,7 +549,6 @@ elif page == "检视":
                 f"[{filtered_df[filtered_df['id'] == x]['purchaseDate'].values[0]}]"
             )
         )
-
         
         if selected_items:
             col1, col2, col3, col4 = st.columns(4)
@@ -766,10 +766,10 @@ elif page == "订阅管理":
         col1, col2, col3 = st.columns(3)
         with col1:
             st.metric("订阅总数", len(subscriptions_db))
-        with col2:
-            st.metric("月付总额", f"{monthly_total:.2f} EUR")
-        with col3:
-            st.metric("年付总额", f"{yearly_total:.2f} EUR")
+        #with col2:
+            #st.metric("月付总额", f"{monthly_total:.2f} EUR")
+        #with col3:
+            #st.metric("年付总额", f"{yearly_total:.2f} EUR")
 
 
 # =========================
@@ -787,25 +787,7 @@ elif page == "报表":
         st.metric("遗失", len(lost_df))
     
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-    # 替换报表页面中的支出趋势部分
+    # 支出趋势部分
 
     st.subheader("📈 支出趋势")
 
@@ -1087,28 +1069,6 @@ elif page == "报表":
             st.info("暂无数据")
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
     # 账户流水分析
     st.subheader("💳 账户流水分析")
     
@@ -1196,8 +1156,8 @@ elif page == "报表":
 
 
 # ==================== 产品利用率检视页面 ====================
-elif page == "产品利用率检视":
-    st.header("📊 产品利用率检视")
+elif page == "利用率检视":
+    st.header("🫗 利用率检视")
     
     if not history_df.empty:
         # 筛选出有利用率数据的记录
@@ -1414,21 +1374,133 @@ elif page == "产品利用率检视":
     else:
         st.info("暂无历史记录")
 
+# =========================
+# 购物清单页面
+# =========================
+elif page == "购物清单":
+    st.header("🛒 购物清单")
+    st.caption("基于最近出库商品生成（仅包含购买次数 > 1 的商品）")
+    
+    if not history_df.empty:
+        # 获取出库记录，按日期降序排序
+        recent_checkout = history_df.sort_values('checkoutDate', ascending=False)
+        
+        # 筛选出购买次数 > 1 的商品
+        eligible_products = set()
+        for product_name, product_info in products_db.items():
+            if product_info.get('purchaseCount', 0) > 1:
+                eligible_products.add(product_name)
+        
+        # 从最近出库记录中筛选出最近的10件符合条件的商品
+        shopping_list = []
+        seen_names = set()
+        
+        for _, item in recent_checkout.iterrows():
+            if len(shopping_list) >= 10:
+                break
+            
+            if item['name'] in eligible_products and item['name'] not in seen_names:
+                shopping_list.append(item)
+                seen_names.add(item['name'])
+        
+        if shopping_list:
+            # 创建展示数据
+            display_items = []
+            for idx, item in enumerate(shopping_list, 1):
+                product_info = products_db.get(item['name'], {})
+                display_items.append({
+                    '序号': idx,
+                    '商品名称': item['name'],
+                    '类别': item['category'],
+                    '最后购买价格': f"{item['actualPrice']:.2f}",
+                    '币种': item['currency'],
+                    '上次出库日期': item['checkoutDate'],
+                    '购买次数': product_info.get('purchaseCount', 0)
+                })
+            
+            display_df = pd.DataFrame(display_items)
+            st.dataframe(display_df, hide_index=True, use_container_width=True)
+            
+            # 生成清单导出选项
+            st.subheader("📋 清单生成")
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                if st.button("📋 复制清单文本"):
+                    # 生成纯文本清单
+                    text_list = "购物清单\n" + "="*20 + "\n\n"
+                    for idx, item in enumerate(shopping_list, 1):
+                        text_list += f"{idx}. {item['name']}\n"
+                        text_list += f"   类别: {item['category']}\n"
+                        text_list += f"   上次价格: {item['actualPrice']:.2f} {item['currency']}\n\n"
+                    
+                    st.code(text_list)
+                    st.caption("可复制上方文本")
+            
+            with col2:
+                if st.button("📊 显示统计"):
+                    col_a, col_b, col_c = st.columns(3)
+                    
+                    with col_a:
+                        st.metric("清单商品数", len(shopping_list))
+                    
+                    with col_b:
+                        total_price_eur = sum([
+                            to_eur(item['actualPrice'], item['currency'], item['checkoutDate'])
+                            for item in shopping_list
+                        ])
+                        st.metric("总预算(EUR)", f"{total_price_eur:.2f}")
+                    
+                    with col_c:
+                        avg_purchase_count = sum([
+                            products_db.get(item['name'], {}).get('purchaseCount', 0)
+                            for item in shopping_list
+                        ]) / len(shopping_list)
+                        st.metric("平均购买次数", f"{avg_purchase_count:.1f}")
+            
+            # 按类别分组显示
+            st.subheader("📂 按类别分组")
+            
+            categories_list = {}
+            for item in shopping_list:
+                cat = item['category'] if item['category'] else '未分类'
+                if cat not in categories_list:
+                    categories_list[cat] = []
+                categories_list[cat].append(item['name'])
+            
+            for cat, items in sorted(categories_list.items()):
+                with st.expander(f"**{cat}** ({len(items)}件)"):
+                    for idx, name in enumerate(items, 1):
+                        st.write(f"{idx}. {name}")
+        
+        else:
+            st.info("暂无符合条件的商品（需要购买次数 > 1）")
+    
+    else:
+        st.info("暂无出库记录")
+
 
 # =========================
 # 指南页面
 # =========================
 elif page == "操作指南":
     st.header("✋🏻操作指南")
-    st.markdown("_更新日期：23.09.2025_")
+    st.markdown("_更新日期：28.09.2025_")
     st.markdown("""
-        - AA制商品：提前区分aa制中自己实际使用的部分和其他人的部分，将自用部分惯常分类，其他人的部分记录为AA款等类别，出库时首款直接删除。对于收款时接收的零头小钱，不再计算。
-        - 本软件的售出功能，不会改变开支趋势计算，类期货投资不是La Mer的宗旨，La Mer追求立足当下的节省模式。
+        - AA制商品：提前区分aa制中自己实际使用的部分和其他人的部分，将自用部分惯常分类，其他人的部分记录为AA款等类别，出库时使用售出功能处理AA款项。
+            - Telekom网费部分,支付比例为我自己 18.97 其他2人 18.96 
+        - 报表页面的开支统计收集的数据来源包括：inventory.csv, history.csv 和 lost.csv ，因此，出售掉的商品不会被统计在内。但是无法显示收入，期货投资不是La Mer的宗旨，La Mer追求立足当下的节省模式。
+        - 使用订阅管理时，请在**付费日当天**记账，软件会将当天日期而非元数据中的日期视为付款日期处理。管理订阅的前提是知道什么时候自己付过款，不是么？如果软件有试用期，就先以0元价格入库。
+        - 退回押金：直接将对应的押金记录以删除的方式出库即可。
+        - 入库时，类型选择两个字的以便记忆。例如，避免将一些商品归类为谷物，另一些归类为谷物类。
+        - 购买的无法转卖的虚拟类产品，例如Steam游戏，如果长时间闲置不玩，且不是因为没有时间才不玩，而是不想玩，可以放入物品区。
     """)
 
 st.sidebar.markdown("---")
-st.sidebar.caption("La Mer ")
+st.sidebar.caption("La Mer v1.46.251020")
 st.sidebar.caption("CREDIT")
-st.sidebar.caption("Designer: 巫獭")
+st.sidebar.caption("Designer: 巫獭UTQ")
 st.sidebar.caption("Senior Engineer: Claude Pro Sonnet 4")
+st.sidebar.caption("Assist Engineer: Prof. Dr. Dr. Claude Pro Haiku 4.5")
 st.sidebar.caption("Technical Support: Streamlit (PyPack)")
