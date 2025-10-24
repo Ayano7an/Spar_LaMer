@@ -1450,6 +1450,29 @@ elif page == "购物清单":
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 # =========================
 # 桑基图分析页面（完整最终版）
 # 金额归一化 + 白底纯黑字
@@ -1461,27 +1484,95 @@ elif page == "桑基图分析":
     # 加载平台颜色配置
     PLATFORM_COLORS_JSON = DATA_DIR / "platform_colors.json"
     
+    # 强制每次都重新加载，不使用缓存
     def load_platform_colors():
-        """加载平台颜色配置（仅从JSON文件）"""
+        """加载平台颜色配置（强制重新加载版本 + 格式验证）"""
+        import json
+        import re
+        
         if PLATFORM_COLORS_JSON.exists():
-            return load_json(PLATFORM_COLORS_JSON, {})
+            try:
+                with open(PLATFORM_COLORS_JSON, 'r', encoding='utf-8') as f:
+                    colors = json.load(f)
+                
+                # 过滤并修复颜色配置
+                fixed_colors = {}
+                errors = []
+                
+                for k, v in colors.items():
+                    # 跳过注释键
+                    if k.startswith('_'):
+                        continue
+                    
+                    original_v = v
+                    
+                    # 修复常见错误
+                    # 1. rbga → rgba
+                    v = v.replace('rbga', 'rgba').replace('RBGA', 'RGBA')
+                    
+                    # 2. 缺少右括号
+                    if v.count('(') > v.count(')'):
+                        v = v + ')'
+                    
+                    # 3. 验证格式
+                    color_patterns = [
+                        r'^rgba\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*,\s*[\d.]+\s*\)$',
+                        r'^rgb\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*\)$',
+                        r'^hsla\(\s*\d+\s*,\s*\d+%\s*,\s*\d+%\s*,\s*[\d.]+\s*\)$',
+                        r'^hsl\(\s*\d+\s*,\s*\d+%\s*,\s*\d+%\s*\)$',
+                        r'^#[0-9a-fA-F]{6}$',
+                    ]
+                    
+                    valid = any(re.match(pattern, v) for pattern in color_patterns)
+                    
+                    if not valid:
+                        errors.append(f"❌ [{k}]: '{original_v}' → 格式错误，已跳过")
+                        continue
+                    
+                    if original_v != v:
+                        errors.append(f"⚠️ [{k}]: '{original_v}' → 已自动修复为 '{v}'")
+                    
+                    fixed_colors[k] = v
+                
+                # 显示错误信息
+                if errors:
+                    st.warning(f"配色文件有 {len(errors)} 个问题：")
+                    for error in errors[:5]:  # 只显示前5个
+                        st.caption(error)
+                    if len(errors) > 5:
+                        st.caption(f"... 还有 {len(errors) - 5} 个问题")
+                
+                return fixed_colors if fixed_colors else {"default": "rgba(150, 150, 150, 0.8)"}
+                
+            except Exception as e:
+                st.error(f"❌ 读取配置文件失败: {e}")
+                return {"default": "rgba(150, 150, 150, 0.8)"}
         else:
             st.warning("⚠️ 未找到 platform_colors.json 配置文件")
-            st.info("请在 lamer_data 目录下创建 platform_colors.json 文件")
+            st.info(f"请在以下位置创建文件: {PLATFORM_COLORS_JSON}")
             return {"default": "rgba(150, 150, 150, 0.8)"}
     
-    def get_platform_color(platform, platform_colors):
-        """获取平台颜色"""
+    def get_platform_color(platform, platform_colors, debug=False):
+        """获取平台颜色（带调试信息）"""
         platform_lower = platform.lower().strip()
         
+        # 精确匹配
         if platform_lower in platform_colors:
+            if debug:
+                st.success(f"✅ [{platform}] 精确匹配: {platform_lower}")
             return platform_colors[platform_lower]
         
+        # 模糊匹配
         for key in platform_colors:
             if key in platform_lower or platform_lower in key:
+                if debug:
+                    st.info(f"🔍 [{platform}] 模糊匹配: {key}")
                 return platform_colors[key]
         
+        # 自动生成
         hue = (hash(platform) % 360)
+        if debug:
+            st.warning(f"⚠️ [{platform}] 未找到配置，使用自动配色")
         return f'hsla({hue}, 65%, 50%, 0.8)'
     
     def create_sankey_diagram(df, platform_colors, height=1000, font_size=11):
@@ -1621,8 +1712,27 @@ elif page == "桑基图分析":
         
         return fig
     
-    # 加载配置
+    # 加载配置（每次强制重新读取）
     platform_colors = load_platform_colors()
+    
+    # 显示加载的配色数量（调试用）
+    debug_mode = st.checkbox("🔍 显示配色调试信息", value=False)
+    
+    if debug_mode:
+        st.info(f"已加载 {len(platform_colors)} 个配色")
+        
+        # 显示所有配色
+        with st.expander("📋 JSON中的所有配色", expanded=True):
+            for key, value in sorted(platform_colors.items()):
+                col1, col2, col3 = st.columns([1, 2, 3])
+                with col1:
+                    st.markdown(f'<div style="background-color: {value}; '
+                              f'width: 50px; height: 25px; border: 1px solid black;"></div>', 
+                              unsafe_allow_html=True)
+                with col2:
+                    st.code(key, language=None)
+                with col3:
+                    st.code(value, language=None)
     
     # 合并所有数据
     all_data = []
@@ -1644,6 +1754,47 @@ elif page == "桑基图分析":
             combined_df = combined_df.dropna(subset=required_cols)
             combined_df['purchaseDate'] = pd.to_datetime(combined_df['purchaseDate'], errors='coerce')
             combined_df = combined_df.dropna(subset=['purchaseDate'])
+            
+            # ========== 调试：显示数据中的实际平台 ==========
+            if debug_mode:
+                st.markdown("---")
+                with st.expander("🏪 数据中的实际平台名称（source）", expanded=True):
+                    actual_sources = sorted(combined_df['source'].dropna().unique().tolist())
+                    st.caption(f"共 {len(actual_sources)} 个平台")
+                    
+                    st.markdown("**匹配测试：**")
+                    for source in actual_sources[:20]:  # 只显示前20个
+                        color = get_platform_color(source, platform_colors, debug=False)
+                        
+                        # 判断匹配类型
+                        source_lower = source.lower().strip()
+                        if source_lower in platform_colors:
+                            match_status = "✅ 精确匹配"
+                            matched_key = source_lower
+                        elif any(key in source_lower or source_lower in key for key in platform_colors):
+                            matched_key = [k for k in platform_colors if key in source_lower or source_lower in key][0]
+                            match_status = f"🔍 模糊匹配: {matched_key}"
+                        else:
+                            match_status = "⚠️ 自动配色"
+                            matched_key = "无"
+                        
+                        col1, col2, col3, col4 = st.columns([2, 1, 2, 3])
+                        with col1:
+                            st.text(source)
+                        with col2:
+                            st.markdown(f'<div style="background-color: {color}; '
+                                      f'width: 40px; height: 25px; border: 1px solid black;"></div>', 
+                                      unsafe_allow_html=True)
+                        with col3:
+                            st.text(match_status)
+                        with col4:
+                            if matched_key != "无":
+                                st.code(platform_colors.get(matched_key, color), language=None)
+                    
+                    if len(actual_sources) > 20:
+                        st.caption(f"... 还有 {len(actual_sources) - 20} 个平台未显示")
+                
+                st.markdown("---")
             
             # ========== 数据筛选 ==========
             st.subheader("🎯 数据筛选")
@@ -1846,6 +1997,25 @@ elif page == "桑基图分析":
             st.error(f"数据缺少必要列: {required_cols}")
     else:
         st.info("暂无购买记录数据")
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 # =========================
