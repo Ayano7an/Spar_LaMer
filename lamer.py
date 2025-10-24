@@ -6,15 +6,16 @@ from datetime import datetime, timedelta
 import plotly.graph_objects as go
 from pathlib import Path
 import time 
+import os 
 
 # ==================== 页面配置 ====================
 st.set_page_config(
-    page_title="La Mer 1.47 ",
+    page_title="仓海 La Mer 1.47 ",
     page_icon="🌊",
     layout="wide"
 )
 
-st.sidebar.title("🌊 La Mer v1.47")
+st.sidebar.title("🌊 仓海 La Mer v1.47")
 
 # ==================== 数据文件路径 ====================
 
@@ -218,6 +219,8 @@ def parse_input_text(text, products_db, deposits_db):
             purchase_date = metadata.get('日期', datetime.now().strftime('%Y-%m-%d'))
             purchase_rate = get_exchange_rate(currency, purchase_date)
             
+            eur_value = to_eur(actual_price, currency, purchase_date)
+
             item = {
                 'id': generate_product_id(product_name),
                 'name': product_name,
@@ -231,7 +234,8 @@ def parse_input_text(text, products_db, deposits_db):
                 'invoiceName': invoice_name,
                 'discount': discount,
                 'inTransit': False,
-                'purchaseRate': purchase_rate
+                'purchaseRate': purchase_rate,
+                'eurValue': eur_value
             }
             
             items.append(item)
@@ -403,10 +407,261 @@ if renewed_subs:
     save_csv(history_df, HISTORY_CSV)
     save_json(subscriptions_db, SUBSCRIPTIONS_JSON)
 
+
+# ==================== 桑基图分析 - 函数定义部分 ====================
+# 这部分代码应该放在主程序的函数定义区域（其他页面函数定义之后）
+
+def load_platform_colors(platform_colors_json):
+    """加载平台颜色配置（强制重新加载版本 + 格式验证）"""
+    import json
+    import re
+    
+    if platform_colors_json.exists():
+        try:
+            with open(platform_colors_json, 'r', encoding='utf-8') as f:
+                colors = json.load(f)
+            
+            # 过滤并修复颜色配置
+            fixed_colors = {}
+            errors = []
+            
+            for k, v in colors.items():
+                # 跳过注释键
+                if k.startswith('_'):
+                    continue
+                
+                original_v = v
+                
+                # 修复常见错误
+                # 1. rbga → rgba
+                v = v.replace('rbga', 'rgba').replace('RBGA', 'RGBA')
+                
+                # 2. 缺少右括号
+                if v.count('(') > v.count(')'):
+                    v = v + ')'
+                
+                # 3. 验证格式
+                color_patterns = [
+                    r'^rgba\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*,\s*[\d.]+\s*\)$',
+                    r'^rgb\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*\)$',
+                    r'^hsla\(\s*\d+\s*,\s*\d+%\s*,\s*\d+%\s*,\s*[\d.]+\s*\)$',
+                    r'^hsl\(\s*\d+\s*,\s*\d+%\s*,\s*\d+%\s*\)$',
+                    r'^#[0-9a-fA-F]{6}$',
+                ]
+                
+                valid = any(re.match(pattern, v) for pattern in color_patterns)
+                
+                if not valid:
+                    errors.append(f"❌ [{k}]: '{original_v}' → 格式错误，已跳过")
+                    continue
+                
+                if original_v != v:
+                    errors.append(f"⚠️ [{k}]: '{original_v}' → 已自动修复为 '{v}'")
+                
+                fixed_colors[k] = v
+            
+            return fixed_colors if fixed_colors else {"default": "rgba(150, 150, 150, 0.8)"}, errors
+            
+        except Exception as e:
+            return {"default": "rgba(150, 150, 150, 0.8)"}, [f"❌ 读取配置文件失败: {e}"]
+    else:
+        return {"default": "rgba(150, 150, 150, 0.8)"}, ["⚠️ 未找到 platform_colors.json 配置文件"]
+
+
+def get_platform_color(platform, platform_colors, debug=False):
+    """获取平台颜色（带调试信息）"""
+    platform_lower = platform.lower().strip()
+    
+    # 精确匹配
+    if platform_lower in platform_colors:
+        return platform_colors[platform_lower], "精确匹配", platform_lower
+    
+    # 模糊匹配
+    for key in platform_colors:
+        if key in platform_lower or platform_lower in key:
+            return platform_colors[key], "模糊匹配", key
+    
+    # 自动生成
+    hue = (hash(platform) % 360)
+    return f'hsla({hue}, 65%, 50%, 0.8)', "自动配色", None
+
+
+def create_sankey_diagram(df, platform_colors, height=1000, font_size=11):
+    """创建金额归一化的三层桑基图（纯黑字体版）"""
+    import plotly.graph_objects as go
+    
+    if df.empty:
+        return None
+    
+    total_amount = df['eurValue'].sum()
+    
+    # 第一层：账户 → 来源
+    layer1 = df.groupby(['account', 'source']).agg({
+        'eurValue': ['sum', 'count']
+    }).reset_index()
+    layer1.columns = ['source', 'target', 'amount', 'count']
+    layer1['normalized'] = layer1['amount'] / total_amount
+    
+    # 第二层：来源 → 类型
+    layer2 = df.groupby(['source', 'category']).agg({
+        'eurValue': ['sum', 'count']
+    }).reset_index()
+    layer2.columns = ['source', 'target', 'amount', 'count']
+    layer2['normalized'] = layer2['amount'] / total_amount
+    
+    # 创建节点
+    accounts = df['account'].unique().tolist()
+    sources = df['source'].unique().tolist()
+    categories = df['category'].unique().tolist()
+    
+    all_labels = accounts + sources + categories
+    label_to_idx = {label: idx for idx, label in enumerate(all_labels)}
+    
+    # 节点配色
+    node_colors = []
+    for label in all_labels:
+        if label in accounts:
+            # 左侧账户：暗金色
+            node_colors.append('rgba(184, 134, 11, 0.85)')
+        elif label in sources:
+            color, _, _ = get_platform_color(label, platform_colors)
+            node_colors.append(color)
+        else:
+            # 右侧类别：翡翠绿
+            node_colors.append('rgba(80, 200, 120, 0.85)')
+    
+    # 处理第一层
+    layer1_source_idx = [label_to_idx[s] for s in layer1['source']]
+    layer1_target_idx = [label_to_idx[t] for t in layer1['target']]
+    layer1_values = layer1['normalized'].tolist()
+    layer1_amounts = layer1['amount'].tolist()
+    layer1_counts = layer1['count'].tolist()
+    layer1_targets = layer1['target'].tolist()
+    
+    # 第一层连接线颜色（固定透明度）
+    layer1_colors = []
+    for target in layer1_targets:
+        platform_color, _, _ = get_platform_color(target, platform_colors)
+        if 'rgba' in platform_color:
+            parts = platform_color.split('(')[1].split(')')[0].split(',')
+            layer1_colors.append(f'rgba({parts[0]}, {parts[1]}, {parts[2]}, 0.5)')
+        elif 'hsla' in platform_color:
+            parts = platform_color.split('(')[1].split(')')[0].split(',')
+            layer1_colors.append(f'hsla({parts[0]}, {parts[1]}, {parts[2]}, 0.5)')
+        else:
+            layer1_colors.append('rgba(150, 150, 150, 0.5)')
+    
+    # 处理第二层
+    layer2_source_idx = [label_to_idx[s] for s in layer2['source']]
+    layer2_target_idx = [label_to_idx[t] for t in layer2['target']]
+    layer2_values = layer2['normalized'].tolist()
+    layer2_amounts = layer2['amount'].tolist()
+    layer2_counts = layer2['count'].tolist()
+    layer2_sources = layer2['source'].tolist()
+    
+    # 第二层连接线颜色
+    layer2_colors = []
+    for src in layer2_sources:
+        platform_color, _, _ = get_platform_color(src, platform_colors)
+        if 'rgba' in platform_color:
+            parts = platform_color.split('(')[1].split(')')[0].split(',')
+            layer2_colors.append(f'rgba({parts[0]}, {parts[1]}, {parts[2]}, 0.5)')
+        elif 'hsla' in platform_color:
+            parts = platform_color.split('(')[1].split(')')[0].split(',')
+            layer2_colors.append(f'hsla({parts[0]}, {parts[1]}, {parts[2]}, 0.5)')
+        else:
+            layer2_colors.append('rgba(150, 150, 150, 0.5)')
+    
+    # 合并
+    source_indices = layer1_source_idx + layer2_source_idx
+    target_indices = layer1_target_idx + layer2_target_idx
+    values = layer1_values + layer2_values
+    actual_amounts = layer1_amounts + layer2_amounts
+    actual_counts = layer1_counts + layer2_counts
+    link_colors = layer1_colors + layer2_colors
+    
+    # 自定义数据
+    customdata = [[amount, count, amount/total_amount*100] 
+                  for amount, count in zip(actual_amounts, actual_counts)]
+    
+    # 创建图表 - 不设置任何字体样式
+    fig = go.Figure(data=[go.Sankey(
+        arrangement='snap',
+        node=dict(
+            pad=25,
+            thickness=30,
+            line=dict(color="black", width=0.5),
+            label=all_labels,
+            color=node_colors,
+            hovertemplate='%{label}<br>占比: %{value:.1%}<extra></extra>',
+        ),
+        link=dict(
+            source=source_indices,
+            target=target_indices,
+            value=values,
+            color=link_colors,
+            customdata=customdata,
+            hovertemplate=(
+                '%{source.label} → %{target.label}<br>'
+                '金额: €%{customdata[0]:.2f}<br>'
+                '次数: %{customdata[1]}<br>'
+                '占比: %{customdata[2]:.1f}%<extra></extra>'
+            )
+        )
+    )])
+    
+    # 布局设置 - 去除所有字体样式配置
+    fig.update_layout(
+        height=height,
+        margin=dict(l=250, r=250, t=50, b=50),
+        plot_bgcolor='white',
+        paper_bgcolor='white'
+    )
+    
+    # 只设置纯黑色文字，无任何其他样式
+    fig.update_traces(
+        textfont=dict(
+            color='#000000',
+            size=font_size
+        )
+    )
+    
+    return fig
+
+
+def force_load_csv_sankey(filepath, columns):
+    """强制读取CSV，不使用任何缓存（桑基图专用）"""
+    import pandas as pd
+    import os
+    
+    if not os.path.exists(filepath):
+        return pd.DataFrame(columns=columns)
+    
+    # 直接读取，每次都是新的
+    df = pd.read_csv(filepath)
+    
+    # 确保所有必需列都存在
+    for col in columns:
+        if col not in df.columns:
+            df[col] = None
+    
+    return df
+
+
+
+
+
+
+
+# ==================== UI界面 ====================
+# ==                                          ===
+
+# ==                                          ===
+# ==                                          ===
 # ==================== UI界面 ====================
 
 st.sidebar.caption("A pilot project of Spar!")
-page = st.sidebar.radio("导航", ["入库", "检视", "遗失", "订阅管理", "报表", "利用率检视", "购物清单","桑基图分析", "操作指南"])
+page = st.sidebar.radio("导航", ["入库", "检视", "遗失", "订阅管理", "开支趋势", "利用率检视", "购物清单","桑基图分析", "操作指南"])
 if renewed_subs:
     st.sidebar.success(f"🔄 自动续费: {', '.join(renewed_subs)}")
 
@@ -588,14 +843,14 @@ elif page == "检视":
                     st.rerun()
             
             with col3:
-                st.write("**出售**")
+                st.write("**垫付结清**")
                 sell_price = st.number_input("售价", 0.0, step=0.1)
                 if accounts_db:
                     sell_account = st.selectbox("账户", accounts_db)
                 else:
                     sell_account = st.text_input("账户")
                 
-                if st.button("确认出售"):
+                if st.button("确认清账"):
                     for item_id in selected_items:
                         item = inventory_df[inventory_df['id'] == item_id].iloc[0].to_dict()
                         item['checkoutDate'] = datetime.now().strftime('%Y-%m-%d')
@@ -609,12 +864,12 @@ elif page == "检视":
                     
                     save_csv(inventory_df, INVENTORY_CSV)
                     save_csv(sold_df, SOLD_CSV)
-                    st.success("💰 出售成功")
+                    st.success("💰 清账成功，指定内容将不再计入支出趋势图")
                     st.rerun()
             
             with col4:
-                st.write("**删除 / AA款清账 /退回押金**")
-                st.caption("删除误操作或结清AA款项，相关记录不会计入支出趋势图。")
+                st.write("**删除 /退回押金**")
+                st.caption("删除误操作或退回押金，相关记录不会计入支出趋势图。")
                 if st.button("🗑️ 删除"):
                     for item_id in selected_items:
                         inventory_df = inventory_df[inventory_df['id'] != item_id]
@@ -773,10 +1028,10 @@ elif page == "订阅管理":
 
 
 # =========================
-# 报表页面
+# 开支趋势页面
 # =========================
-elif page == "报表":
-    st.header("📊 统计报表")
+elif page == "开支趋势":
+    st.header("📊 开支趋势")
     
     col1, col2, col3 = st.columns(3)
     with col1:
@@ -1462,261 +1717,38 @@ elif page == "购物清单":
 
 
 
+# ==================== 桑基图分析 - 页面显示部分 ====================
+# 这部分代码应该放在主程序的页面选择部分（elif page == "桑基图分析":）
 
-
-
-
-
-
-
-
-
-
-
-# =========================
-# 桑基图分析页面（完整最终版）
-# 金额归一化 + 白底纯黑字
-# =========================
 elif page == "桑基图分析":
     st.header("📊 消费流向桑基图")
     st.caption("三层流向分析：账户 → 来源 → 类型（线条粗细 = 金额）")
     
-    # 加载平台颜色配置
+    # 配置文件路径
     PLATFORM_COLORS_JSON = DATA_DIR / "platform_colors.json"
     
-    # 强制每次都重新加载，不使用缓存
-    def load_platform_colors():
-        """加载平台颜色配置（强制重新加载版本 + 格式验证）"""
-        import json
-        import re
-        
-        if PLATFORM_COLORS_JSON.exists():
-            try:
-                with open(PLATFORM_COLORS_JSON, 'r', encoding='utf-8') as f:
-                    colors = json.load(f)
-                
-                # 过滤并修复颜色配置
-                fixed_colors = {}
-                errors = []
-                
-                for k, v in colors.items():
-                    # 跳过注释键
-                    if k.startswith('_'):
-                        continue
-                    
-                    original_v = v
-                    
-                    # 修复常见错误
-                    # 1. rbga → rgba
-                    v = v.replace('rbga', 'rgba').replace('RBGA', 'RGBA')
-                    
-                    # 2. 缺少右括号
-                    if v.count('(') > v.count(')'):
-                        v = v + ')'
-                    
-                    # 3. 验证格式
-                    color_patterns = [
-                        r'^rgba\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*,\s*[\d.]+\s*\)$',
-                        r'^rgb\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*\)$',
-                        r'^hsla\(\s*\d+\s*,\s*\d+%\s*,\s*\d+%\s*,\s*[\d.]+\s*\)$',
-                        r'^hsl\(\s*\d+\s*,\s*\d+%\s*,\s*\d+%\s*\)$',
-                        r'^#[0-9a-fA-F]{6}$',
-                    ]
-                    
-                    valid = any(re.match(pattern, v) for pattern in color_patterns)
-                    
-                    if not valid:
-                        errors.append(f"❌ [{k}]: '{original_v}' → 格式错误，已跳过")
-                        continue
-                    
-                    if original_v != v:
-                        errors.append(f"⚠️ [{k}]: '{original_v}' → 已自动修复为 '{v}'")
-                    
-                    fixed_colors[k] = v
-                
-                # 显示错误信息
-                if errors:
-                    st.warning(f"配色文件有 {len(errors)} 个问题：")
-                    for error in errors[:5]:  # 只显示前5个
-                        st.caption(error)
-                    if len(errors) > 5:
-                        st.caption(f"... 还有 {len(errors) - 5} 个问题")
-                
-                return fixed_colors if fixed_colors else {"default": "rgba(150, 150, 150, 0.8)"}
-                
-            except Exception as e:
-                st.error(f"❌ 读取配置文件失败: {e}")
-                return {"default": "rgba(150, 150, 150, 0.8)"}
-        else:
-            st.warning("⚠️ 未找到 platform_colors.json 配置文件")
-            st.info(f"请在以下位置创建文件: {PLATFORM_COLORS_JSON}")
-            return {"default": "rgba(150, 150, 150, 0.8)"}
+    # 加载平台颜色配置
+    platform_colors, config_errors = load_platform_colors(PLATFORM_COLORS_JSON)
     
-    def get_platform_color(platform, platform_colors, debug=False):
-        """获取平台颜色（带调试信息）"""
-        platform_lower = platform.lower().strip()
-        
-        # 精确匹配
-        if platform_lower in platform_colors:
-            if debug:
-                st.success(f"✅ [{platform}] 精确匹配: {platform_lower}")
-            return platform_colors[platform_lower]
-        
-        # 模糊匹配
-        for key in platform_colors:
-            if key in platform_lower or platform_lower in key:
-                if debug:
-                    st.info(f"🔍 [{platform}] 模糊匹配: {key}")
-                return platform_colors[key]
-        
-        # 自动生成
-        hue = (hash(platform) % 360)
-        if debug:
-            st.warning(f"⚠️ [{platform}] 未找到配置，使用自动配色")
-        return f'hsla({hue}, 65%, 50%, 0.8)'
+    # 显示配置错误（如果有）
+    if config_errors:
+        with st.expander("⚠️ 配色文件问题", expanded=False):
+            for error in config_errors[:5]:
+                st.caption(error)
+            if len(config_errors) > 5:
+                st.caption(f"... 还有 {len(config_errors) - 5} 个问题")
     
-    def create_sankey_diagram(df, platform_colors, height=1000, font_size=11):
-        """创建金额归一化的三层桑基图（纯黑字体版）"""
-        if df.empty:
-            return None
-        
-        total_amount = df['eurValue'].sum()
-        
-        # 第一层：账户 → 来源
-        layer1 = df.groupby(['account', 'source']).agg({
-            'eurValue': ['sum', 'count']
-        }).reset_index()
-        layer1.columns = ['source', 'target', 'amount', 'count']
-        layer1['normalized'] = layer1['amount'] / total_amount
-        
-        # 第二层：来源 → 类型
-        layer2 = df.groupby(['source', 'category']).agg({
-            'eurValue': ['sum', 'count']
-        }).reset_index()
-        layer2.columns = ['source', 'target', 'amount', 'count']
-        layer2['normalized'] = layer2['amount'] / total_amount
-        
-        # 创建节点
-        accounts = df['account'].unique().tolist()
-        sources = df['source'].unique().tolist()
-        categories = df['category'].unique().tolist()
-        
-        all_labels = accounts + sources + categories
-        label_to_idx = {label: idx for idx, label in enumerate(all_labels)}
-        
-        # 节点配色
-        node_colors = []
-        for label in all_labels:
-            if label in accounts:
-                node_colors.append('rgba(120, 120, 120, 0.85)')
-            elif label in sources:
-                node_colors.append(get_platform_color(label, platform_colors))
-            else:
-                node_colors.append('rgba(100, 150, 180, 0.85)')
-        
-        # 处理第一层
-        layer1_source_idx = [label_to_idx[s] for s in layer1['source']]
-        layer1_target_idx = [label_to_idx[t] for t in layer1['target']]
-        layer1_values = layer1['normalized'].tolist()
-        layer1_amounts = layer1['amount'].tolist()
-        layer1_counts = layer1['count'].tolist()
-        layer1_targets = layer1['target'].tolist()
-        
-        # 第一层连接线颜色（固定透明度）
-        layer1_colors = []
-        for target in layer1_targets:
-            platform_color = get_platform_color(target, platform_colors)
-            if 'rgba' in platform_color:
-                parts = platform_color.split('(')[1].split(')')[0].split(',')
-                layer1_colors.append(f'rgba({parts[0]}, {parts[1]}, {parts[2]}, 0.5)')
-            elif 'hsla' in platform_color:
-                parts = platform_color.split('(')[1].split(')')[0].split(',')
-                layer1_colors.append(f'hsla({parts[0]}, {parts[1]}, {parts[2]}, 0.5)')
-            else:
-                layer1_colors.append('rgba(150, 150, 150, 0.5)')
-        
-        # 处理第二层
-        layer2_source_idx = [label_to_idx[s] for s in layer2['source']]
-        layer2_target_idx = [label_to_idx[t] for t in layer2['target']]
-        layer2_values = layer2['normalized'].tolist()
-        layer2_amounts = layer2['amount'].tolist()
-        layer2_counts = layer2['count'].tolist()
-        layer2_sources = layer2['source'].tolist()
-        
-        # 第二层连接线颜色
-        layer2_colors = []
-        for src in layer2_sources:
-            platform_color = get_platform_color(src, platform_colors)
-            if 'rgba' in platform_color:
-                parts = platform_color.split('(')[1].split(')')[0].split(',')
-                layer2_colors.append(f'rgba({parts[0]}, {parts[1]}, {parts[2]}, 0.5)')
-            elif 'hsla' in platform_color:
-                parts = platform_color.split('(')[1].split(')')[0].split(',')
-                layer2_colors.append(f'hsla({parts[0]}, {parts[1]}, {parts[2]}, 0.5)')
-            else:
-                layer2_colors.append('rgba(150, 150, 150, 0.5)')
-        
-        # 合并
-        source_indices = layer1_source_idx + layer2_source_idx
-        target_indices = layer1_target_idx + layer2_target_idx
-        values = layer1_values + layer2_values
-        actual_amounts = layer1_amounts + layer2_amounts
-        actual_counts = layer1_counts + layer2_counts
-        link_colors = layer1_colors + layer2_colors
-        
-        # 自定义数据
-        customdata = [[amount, count, amount/total_amount*100] 
-                      for amount, count in zip(actual_amounts, actual_counts)]
-        
-        # 创建图表 - 不设置任何字体样式
-        fig = go.Figure(data=[go.Sankey(
-            arrangement='snap',
-            node=dict(
-                pad=25,
-                thickness=30,
-                line=dict(color="black", width=0.5),
-                label=all_labels,
-                color=node_colors,
-                hovertemplate='<b>%{label}</b><br/>占比: %{value:.1%}<extra></extra>',
-            ),
-            link=dict(
-                source=source_indices,
-                target=target_indices,
-                value=values,
-                color=link_colors,
-                customdata=customdata,
-                hovertemplate=(
-                    '<b>%{source.label} → %{target.label}</b><br/>'
-                    '金额: €%{customdata[0]:.2f}<br/>'
-                    '次数: %{customdata[1]}<br/>'
-                    '占比: %{customdata[2]:.1f}%<extra></extra>'
-                )
-            )
-        )])
-        
-        # 布局设置 - 去除所有字体样式配置
-        fig.update_layout(
-            height=height,
-            margin=dict(l=200, r=200, t=50, b=50),
-            plot_bgcolor='white',
-            paper_bgcolor='white'
-        )
-        
-        # 只设置纯黑色文字，无任何其他样式
-        fig.update_traces(
-            textfont=dict(
-                color='#000000',
-                size=font_size
-            )
-        )
-        
-        return fig
+    # ========== 强制重新加载CSV数据 ==========
+    st.caption("🔄 正在加载最新数据...")
+    inventory_df = force_load_csv_sankey(INVENTORY_CSV, inv_cols)
+    history_df = force_load_csv_sankey(HISTORY_CSV, hist_cols)
+    lost_df = force_load_csv_sankey(LOST_CSV, lost_cols)
+    sold_df = force_load_csv_sankey(SOLD_CSV, sold_cols)
     
-    # 加载配置（每次强制重新读取）
-    platform_colors = load_platform_colors()
+    st.caption(f"✅ 已加载：inventory({len(inventory_df)}) + history({len(history_df)}) + lost({len(lost_df)}) + sold({len(sold_df)})")
     
-    # 显示加载的配色数量（调试用）
-    debug_mode = st.checkbox("🔍 显示配色调试信息", value=False)
+    # ========== 调试模式 ==========
+    debug_mode = st.sidebar.checkbox("🔍 显示配色调试信息", value=False)
     
     if debug_mode:
         st.info(f"已加载 {len(platform_colors)} 个配色")
@@ -1734,13 +1766,14 @@ elif page == "桑基图分析":
                 with col3:
                     st.code(value, language=None)
     
-    # 合并所有数据
+    # ========== 合并数据 ==========
+    # 注意：不包含 sold.csv，因为那是收入而非支出
     all_data = []
     for csv_file, df in [
-        ('inventory.csv', inventory_df),
-        ('history.csv', history_df),
-        ('lost.csv', lost_df),
-        ('sold.csv', sold_df)
+        ('inventory.csv', inventory_df),  # 当前持有的物品
+        ('history.csv', history_df),      # 历史购买记录
+        ('lost.csv', lost_df)              # 丢失/损坏的物品
+        # ❌ 不包含 sold.csv - 那是收回的钱，不是开支
     ]:
         if not df.empty:
             df_copy = df.copy()
@@ -1755,6 +1788,24 @@ elif page == "桑基图分析":
             combined_df['purchaseDate'] = pd.to_datetime(combined_df['purchaseDate'], errors='coerce')
             combined_df = combined_df.dropna(subset=['purchaseDate'])
             
+            # ========== 调试：显示原始数据统计 ==========
+            with st.expander("📊 原始数据统计", expanded=False):
+                col_d1, col_d2, col_d3, col_d4 = st.columns(4)
+                with col_d1:
+                    st.metric("inventory", len(inventory_df))
+                with col_d2:
+                    st.metric("history", len(history_df))
+                with col_d3:
+                    st.metric("lost", len(lost_df))
+                with col_d4:
+                    st.metric("sold", len(sold_df))
+                
+                st.caption(f"合并后总记录数: {len(combined_df)}")
+                
+                if len(combined_df) > 0:
+                    st.caption("最新的5条记录：")
+                    st.dataframe(combined_df.tail(5)[['name', 'category', 'source', 'eurValue', 'purchaseDate']])
+            
             # ========== 调试：显示数据中的实际平台 ==========
             if debug_mode:
                 st.markdown("---")
@@ -1764,37 +1815,27 @@ elif page == "桑基图分析":
                     
                     st.markdown("**匹配测试：**")
                     for source in actual_sources[:20]:  # 只显示前20个
-                        color = get_platform_color(source, platform_colors, debug=False)
-                        
-                        # 判断匹配类型
-                        source_lower = source.lower().strip()
-                        if source_lower in platform_colors:
-                            match_status = "✅ 精确匹配"
-                            matched_key = source_lower
-                        elif any(key in source_lower or source_lower in key for key in platform_colors):
-                            matched_key = [k for k in platform_colors if key in source_lower or source_lower in key][0]
-                            match_status = f"🔍 模糊匹配: {matched_key}"
-                        else:
-                            match_status = "⚠️ 自动配色"
-                            matched_key = "无"
+                        color, match_type, matched_key = get_platform_color(source, platform_colors)
                         
                         col1, col2, col3, col4 = st.columns([2, 1, 2, 3])
                         with col1:
                             st.text(source)
                         with col2:
-                            st.markdown(f'<div style="background-color: {color}; '
-                                      f'width: 40px; height: 25px; border: 1px solid black;"></div>', 
-                                      unsafe_allow_html=True)
+                            if match_type == "精确匹配":
+                                st.success("✅")
+                            elif match_type == "模糊匹配":
+                                st.info("🔍")
+                            else:
+                                st.warning("⚠️")
                         with col3:
-                            st.text(match_status)
+                            st.caption(f"{match_type}: {matched_key if matched_key else '无'}")
                         with col4:
-                            if matched_key != "无":
-                                st.code(platform_colors.get(matched_key, color), language=None)
-                    
-                    if len(actual_sources) > 20:
-                        st.caption(f"... 还有 {len(actual_sources) - 20} 个平台未显示")
-                
-                st.markdown("---")
+                            st.markdown(f'<div style="background-color: {color}; '
+                                      f'width: 100px; height: 20px; border: 1px solid black;"></div>', 
+                                      unsafe_allow_html=True)
+            
+            # 初始化筛选后的数据
+            filtered_df = combined_df.copy()
             
             # ========== 数据筛选 ==========
             st.subheader("🎯 数据筛选")
@@ -1802,26 +1843,22 @@ elif page == "桑基图分析":
             col_filter1, col_filter2 = st.columns(2)
             
             with col_filter1:
-                all_categories = sorted(combined_df['category'].dropna().unique().tolist())
-                
-                filter_mode = st.radio(
+                category_filter = st.radio(
                     "类型显示模式",
-                    ["显示全部", "只显示前N个", "自定义选择"],
+                    ["显示全部", "只显示前N个", "手动选择"],
                     horizontal=True,
                     key="category_filter_mode"
                 )
                 
-                filtered_df = combined_df.copy()
-                
-                if filter_mode == "只显示前N个":
-                    # 按金额排序取前N
-                    category_amounts = combined_df.groupby('category')['eurValue'].sum().sort_values(ascending=False)
-                    top_n = st.slider("显示金额最高的前N个类型", 5, 30, 15, key="top_n_categories")
-                    top_categories = category_amounts.head(top_n).index.tolist()
+                if category_filter == "只显示前N个":
+                    # 按金额排序
+                    category_amounts = filtered_df.groupby('category')['eurValue'].sum().sort_values(ascending=False)
+                    top_n_cat = st.slider("显示金额最高的前N个类型", 5, 20, 10, key="top_n_categories")
+                    top_categories = category_amounts.head(top_n_cat).index.tolist()
                     filtered_df = filtered_df[filtered_df['category'].isin(top_categories)]
-                    st.caption(f"✅ 显示前 {top_n} 个类型（按金额）")
-                    
-                elif filter_mode == "自定义选择":
+                    st.caption(f"✅ 显示前 {top_n_cat} 个类型（按金额）")
+                elif category_filter == "手动选择":
+                    all_categories = sorted(filtered_df['category'].unique().tolist())
                     selected_categories = st.multiselect(
                         "选择要显示的类型",
                         all_categories,
@@ -2018,24 +2055,34 @@ elif page == "桑基图分析":
 
 
 
+
+
 # =========================
 # 指南页面
 # =========================
 elif page == "操作指南":
     st.header("✋🏻操作指南")
-    st.markdown("_更新日期：28.09.2025_")
+    st.markdown("_更新日期：24.10.2025_")
     st.markdown("""
-        - AA制商品：提前区分aa制中自己实际使用的部分和其他人的部分，将自用部分惯常分类，其他人的部分记录为AA款等类别，出库时使用售出功能处理AA款项。
-            - Telekom网费部分,支付比例为我自己 18.97 其他2人 18.96 
-        - 报表页面的开支统计收集的数据来源包括：inventory.csv, history.csv 和 lost.csv ，因此，出售掉的商品不会被统计在内。但是无法显示收入，期货投资不是La Mer的宗旨，La Mer追求立足当下的节省模式。
-        - 使用订阅管理时，请在**付费日当天**记账，软件会将当天日期而非元数据中的日期视为付款日期处理。管理订阅的前提是知道什么时候自己付过款，不是么？如果软件有试用期，就先以0元价格入库。
-        - 退回押金：直接将对应的押金记录以删除的方式出库即可。
+        - 出售或删除功能解释：
+            - 均摊或者垫付的情形：使用类型「垫付」，垫付只能通过结清（原来的出售）功能出库，出库商品不会被统计在桑基图或支出趋势图中。
+            - 支付瓶子押金的情形：直接使用「删除」功能将相关交易删除，视为从未拥有该产品。
+        - 支出趋势图解释：        
+            - 报表页面的开支统计收集的数据来源包括：inventory.csv, history.csv 和 lost.csv ，因此，出售掉的商品不会被统计在内。
+        - 订阅管理解释：
+            - 使用订阅管理时，请在**付费日当天**记账，软件会将当天日期而非元数据中的日期视为付款日期处理。管理订阅的前提是知道什么时候自己付过款，不是么？如果软件有试用期，就先以0元价格入库。
+        - 桑基图说明：
+            - 桑基图数据来源同样不包括sold；
+        - SOLD特殊规则说明：
+            - sold只负责结清垫付或者均摊的情形，不负责处理二手出售，出于维护考虑不修改文件名；
+            - 如果以二手的形式出售产品，正常出库即可。
+        ***
         - 入库时，类型选择两个字的以便记忆。例如，避免将一些商品归类为谷物，另一些归类为谷物类。
-        - 购买的无法转卖的虚拟类产品，例如Steam游戏，如果长时间闲置不玩，且不是因为没有时间才不玩，而是不想玩，可以放入物品区。
+        - 购买的无法转卖的虚拟类产品，仓储规则另行安排。
     """)
 
 st.sidebar.markdown("---")
-st.sidebar.caption("La Mer v1.47.251024")
+st.sidebar.caption("仓海 v1.47.251024")
 st.sidebar.caption("CREDIT")
 st.sidebar.caption("Designer: 巫獭UTQ")
 st.sidebar.caption("Senior Engineer: Claude Pro Sonnet 4")
