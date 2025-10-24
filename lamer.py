@@ -100,9 +100,9 @@ def get_exchange_rate(currency, date_str):
 def to_eur(amount, currency, purchase_date):
     """转换为EUR基准"""
     if currency == BASE_CURRENCY:
-        return amount
+        return round(float(amount), 2)  # 🔥 即使是EUR也保留两位小数
     rate = get_exchange_rate(currency, purchase_date)
-    return amount / rate
+    return round(amount / rate, 2)  # 🔥 转换后保留两位小数
 
 def generate_product_id(name):
     """生成商品ID"""
@@ -221,12 +221,13 @@ def parse_input_text(text, products_db, deposits_db):
             
             eur_value = to_eur(actual_price, currency, purchase_date)
 
+
             item = {
                 'id': generate_product_id(product_name),
                 'name': product_name,
                 'category': current_category,
-                'actualPrice': actual_price,
-                'standardPrice': standard_price,
+                'actualPrice': round(float(actual_price), 2),  # 🔥 原价格也保留两位
+                'standardPrice': round(float(standard_price), 2),  # 🔥 标准价也保留两位
                 'currency': currency,
                 'purchaseDate': purchase_date,
                 'source': metadata.get('入金', ''),
