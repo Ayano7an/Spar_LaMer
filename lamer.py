@@ -10,12 +10,12 @@ import os
 
 # ==================== 页面配置 ====================
 st.set_page_config(
-    page_title="仓海 La Mer 1.47 ",
+    page_title="沧海 La Mer 1.48 ",
     page_icon="🌊",
     layout="wide"
 )
 
-st.sidebar.title("🌊 仓海 La Mer v1.47")
+st.sidebar.title("🌊 沧海 La Mer v1.47")
 
 # ==================== 数据文件路径 ====================
 
@@ -662,7 +662,8 @@ def force_load_csv_sankey(filepath, columns):
 # ==================== UI界面 ====================
 
 st.sidebar.caption("A pilot project of Spar!")
-page = st.sidebar.radio("导航", ["入库", "检视", "遗失", "订阅管理", "开支趋势", "利用率检视", "购物清单","桑基图分析", "操作指南"])
+page = st.sidebar.radio("导航", ["入库", "检视", "遗失", "订阅", "趋势", "效用", "采购", "特异", "桑基", "说明"])
+
 if renewed_subs:
     st.sidebar.success(f"🔄 自动续费: {', '.join(renewed_subs)}")
 
@@ -752,8 +753,21 @@ if page == "入库":
 
 # ==================== 检视页面 ====================
 elif page == "检视":
+
+    st.header("📊 货物记录")
+    
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("库存", len(inventory_df))
+    with col2:
+        st.metric("已出库", len(history_df))
+    with col3:
+        st.metric("遗失", len(lost_df))
+
+
     st.header("👁️ 货物检视")
     
+
     if not inventory_df.empty:
         inventory_df['eurValue'] = inventory_df.apply(
             lambda row: to_eur(row['actualPrice'], row['currency'], row['purchaseDate']),
@@ -911,7 +925,7 @@ elif page == "遗失":
 # =========================
 # 订阅管理页面
 # =========================
-elif page == "订阅管理":
+elif page == "订阅":
     st.header("🔄 订阅服务管理")
     
     # 添加订阅
@@ -1031,16 +1045,8 @@ elif page == "订阅管理":
 # =========================
 # 开支趋势页面
 # =========================
-elif page == "开支趋势":
-    st.header("📊 开支趋势")
-    
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.metric("库存", len(inventory_df))
-    with col2:
-        st.metric("已出库", len(history_df))
-    with col3:
-        st.metric("遗失", len(lost_df))
+elif page == "趋势":
+
     
 
     # 支出趋势部分
@@ -1412,7 +1418,7 @@ elif page == "开支趋势":
 
 
 # ==================== 产品利用率检视页面 ====================
-elif page == "利用率检视":
+elif page == "效用":
     st.header("🫗 利用率检视")
     
     if not history_df.empty:
@@ -1599,9 +1605,9 @@ elif page == "利用率检视":
         st.info("暂无历史记录")
 
 # =========================
-# 购物清单页面
+# 采购页面
 # =========================
-elif page == "购物清单":
+elif page == "采购":
     st.header("🛒 购物清单")
     st.caption("基于最近出库商品生成（仅包含购买次数 > 1 的商品）")
     
@@ -1615,12 +1621,12 @@ elif page == "购物清单":
             if product_info.get('purchaseCount', 0) > 1:
                 eligible_products.add(product_name)
         
-        # 从最近出库记录中筛选出最近的10件符合条件的商品
+        # 从最近出库记录中筛选出最近的20件符合条件的商品
         shopping_list = []
         seen_names = set()
         
         for _, item in recent_checkout.iterrows():
-            if len(shopping_list) >= 10:
+            if len(shopping_list) >= 20:
                 break
             
             if item['name'] in eligible_products and item['name'] not in seen_names:
@@ -1653,11 +1659,11 @@ elif page == "购物清单":
             with col1:
                 if st.button("📋 复制清单文本"):
                     # 生成纯文本清单
-                    text_list = "购物清单\n" + "="*20 + "\n\n"
+                    text_list = ""
                     for idx, item in enumerate(shopping_list, 1):
-                        text_list += f"{idx}. {item['name']}\n"
-                        text_list += f"   类别: {item['category']}\n"
-                        text_list += f"   上次价格: {item['actualPrice']:.2f} {item['currency']}\n\n"
+                        text_list += f"{item['name']}_"
+                        text_list += f"类别: {item['category']}_"
+                        text_list += f"上次价格: {item['actualPrice']:.2f} {item['currency']}\n"
                     
                     st.code(text_list)
                     st.caption("可复制上方文本")
@@ -1712,6 +1718,138 @@ elif page == "购物清单":
 
 
 
+# ==================== 特异商品页面 ====================
+elif page == "特异":
+    st.header("✨ 特异商品分析")
+    st.caption("低频购买的商品，可能是精心挑选的自我奖励")
+    
+    # 阈值设置
+    threshold = st.sidebar.slider("常规商品阈值（购买次数≥此值视为常规）", 1, 10, 2)
+    
+    # 合并所有消费数据（不含sold）
+    all_expense = pd.concat([inventory_df, history_df, lost_df], ignore_index=True)
+    
+    if all_expense.empty:
+        st.info("暂无消费记录")
+    else:
+        # 确保有eurValue列
+        if 'eurValue' not in all_expense.columns:
+            all_expense['eurValue'] = all_expense.apply(
+                lambda row: to_eur(row['actualPrice'], row['currency'], row['purchaseDate']),
+                axis=1
+            )
+        
+        # 解析月份
+        all_expense['purchaseDate'] = pd.to_datetime(all_expense['purchaseDate'], errors='coerce')
+        all_expense = all_expense.dropna(subset=['purchaseDate'])
+        all_expense['month'] = all_expense['purchaseDate'].dt.to_period('M')
+        
+        # 月份选择
+        available_months = sorted(all_expense['month'].unique(), reverse=True)
+        available_months_str = [str(m) for m in available_months]
+        
+        current_month = pd.Period(datetime.now(), freq='M')
+        default_month = str(current_month) if current_month in available_months else available_months_str[0]
+        
+        selected_month = st.selectbox(
+            "选择月份", 
+            available_months_str,
+            index=available_months_str.index(default_month) if default_month in available_months_str else 0
+        )
+        selected_period = pd.Period(selected_month)
+        
+        # 筛选当月数据
+        month_data = all_expense[all_expense['month'] == selected_period].copy()
+        
+        if month_data.empty:
+            st.info(f"{selected_month} 暂无消费记录")
+        else:
+            # 判断每个商品是常规还是特异
+            # 基于 products_db 中的 purchaseCount
+            def classify_item(name):
+                # 订阅服务一律视为常规
+                if name in subscriptions_db:
+                    return 'regular'
+                
+                if name in products_db:
+                    count = products_db[name].get('purchaseCount', 1)
+                    return 'regular' if count >= threshold else 'occasional'
+                return 'occasional'
+            
+            month_data['expense_type'] = month_data['name'].apply(classify_item)
+            
+            # 分离常规与特异
+            regular_df = month_data[month_data['expense_type'] == 'regular']
+            occasional_df = month_data[month_data['expense_type'] == 'occasional']
+            
+            regular_total = regular_df['eurValue'].sum()
+            occasional_total = occasional_df['eurValue'].sum()
+            total = regular_total + occasional_total
+            
+            # 概览指标
+            st.subheader("📊 本月概览")
+            col1, col2, col3, col4 = st.columns(4)
+            
+            with col1:
+                st.metric("总支出", f"€{total:.2f}")
+            with col2:
+                st.metric("常规支出", f"€{regular_total:.2f}")
+            with col3:
+                st.metric("特异支出", f"€{occasional_total:.2f}")
+            with col4:
+                ratio = (occasional_total / total * 100) if total > 0 else 0
+                st.metric("特异占比", f"{ratio:.1f}%")
+            
+            st.markdown("---")
+            
+            # 特异商品清单
+            st.subheader("✨ 特异商品清单")
+            
+            if occasional_df.empty:
+                st.success("本月没有特异支出，全是常规消费！")
+            else:
+                # 按金额降序
+                occasional_display = occasional_df[['name', 'category', 'purchaseDate', 'actualPrice', 'currency', 'eurValue']].copy()
+                occasional_display = occasional_display.sort_values('eurValue', ascending=False)
+                occasional_display['purchaseDate'] = occasional_display['purchaseDate'].dt.strftime('%Y-%m-%d')
+                occasional_display['eurValue'] = occasional_display['eurValue'].round(2)
+                
+                # 添加购买次数信息
+                occasional_display['历史购买次数'] = occasional_display['name'].apply(
+                    lambda x: products_db.get(x, {}).get('purchaseCount', 1)
+                )
+                
+                occasional_display.columns = ['商品名称', '类别', '购买日期', '价格', '币种', '价值(EUR)', '历史购买次数']
+                
+                st.dataframe(occasional_display, use_container_width=True, hide_index=True)
+                
+                # 按类别汇总
+                with st.expander("📂 特异支出按类别汇总"):
+                    cat_summary = occasional_df.groupby('category')['eurValue'].agg(['sum', 'count']).round(2)
+                    cat_summary.columns = ['金额(EUR)', '件数']
+                    cat_summary = cat_summary.sort_values('金额(EUR)', ascending=False)
+                    st.dataframe(cat_summary, use_container_width=True)
+            
+            # 常规商品清单（可折叠）
+            with st.expander(f"📦 常规商品清单（{len(regular_df)} 件，共 €{regular_total:.2f}）"):
+                if regular_df.empty:
+                    st.info("本月没有常规消费")
+                else:
+                    regular_display = regular_df[['name', 'category', 'purchaseDate', 'actualPrice', 'currency', 'eurValue']].copy()
+                    regular_display = regular_display.sort_values('eurValue', ascending=False)
+                    regular_display['purchaseDate'] = regular_display['purchaseDate'].dt.strftime('%Y-%m-%d')
+                    regular_display['eurValue'] = regular_display['eurValue'].round(2)
+                    regular_display['历史购买次数'] = regular_display['name'].apply(
+                        lambda x: products_db.get(x, {}).get('purchaseCount', 1)
+                    )
+                    regular_display.columns = ['商品名称', '类别', '购买日期', '价格', '币种', '价值(EUR)', '历史购买次数']
+                    st.dataframe(regular_display, use_container_width=True, hide_index=True)
+
+
+
+
+
+
 
 
 
@@ -1721,7 +1859,7 @@ elif page == "购物清单":
 # ==================== 桑基图分析 - 页面显示部分 ====================
 # 这部分代码应该放在主程序的页面选择部分（elif page == "桑基图分析":）
 
-elif page == "桑基图分析":
+elif page == "桑基":
     st.header("📊 消费流向桑基图")
     st.caption("三层流向分析：账户 → 来源 → 类型（线条粗细 = 金额）")
     
@@ -1744,9 +1882,9 @@ elif page == "桑基图分析":
     inventory_df = force_load_csv_sankey(INVENTORY_CSV, inv_cols)
     history_df = force_load_csv_sankey(HISTORY_CSV, hist_cols)
     lost_df = force_load_csv_sankey(LOST_CSV, lost_cols)
-    sold_df = force_load_csv_sankey(SOLD_CSV, sold_cols)
+    # sold_df = force_load_csv_sankey(SOLD_CSV, sold_cols)
     
-    st.caption(f"✅ 已加载：inventory({len(inventory_df)}) + history({len(history_df)}) + lost({len(lost_df)}) + sold({len(sold_df)})")
+    st.caption(f"✅ 已加载：inventory({len(inventory_df)}) + history({len(history_df)}) + lost({len(lost_df)})")
     
     # ========== 调试模式 ==========
     debug_mode = st.sidebar.checkbox("🔍 显示配色调试信息", value=False)
@@ -2061,9 +2199,9 @@ elif page == "桑基图分析":
 # =========================
 # 指南页面
 # =========================
-elif page == "操作指南":
-    st.header("✋🏻操作指南")
-    st.markdown("_更新日期：24.10.2025_")
+elif page == "说明":
+    st.header("✋🏻说明")
+    st.markdown("_更新日期：02.11.2025_")
     st.markdown("""
         - 出售或删除功能解释：
             - 均摊或者垫付的情形：使用类型「垫付」，垫付只能通过结清（原来的出售）功能出库，出库商品不会被统计在桑基图或支出趋势图中。
@@ -2072,20 +2210,21 @@ elif page == "操作指南":
             - 报表页面的开支统计收集的数据来源包括：inventory.csv, history.csv 和 lost.csv ，因此，出售掉的商品不会被统计在内。
         - 订阅管理解释：
             - 使用订阅管理时，请在**付费日当天**记账，软件会将当天日期而非元数据中的日期视为付款日期处理。管理订阅的前提是知道什么时候自己付过款，不是么？如果软件有试用期，就先以0元价格入库。
+            - 如果月底（如29,30,31日付款），推荐改为1日。
         - 桑基图说明：
             - 桑基图数据来源同样不包括sold；
         - SOLD特殊规则说明：
             - sold只负责结清垫付或者均摊的情形，不负责处理二手出售，出于维护考虑不修改文件名；
-            - 如果以二手的形式出售产品，正常出库即可。
+            - 如果以二手的形式出售产品，正常出库即可，利用率设置为（1-成色），即如果九五新出手，利用率写为5%。
         ***
         - 入库时，类型选择两个字的以便记忆。例如，避免将一些商品归类为谷物，另一些归类为谷物类。
         - 购买的无法转卖的虚拟类产品，仓储规则另行安排。
     """)
 
 st.sidebar.markdown("---")
-st.sidebar.caption("仓海 v1.47.251024")
+st.sidebar.caption("沧海 v1.48.25251228")
 st.sidebar.caption("CREDIT")
-st.sidebar.caption("Designer: 巫獭UTQ")
-st.sidebar.caption("Senior Engineer: Claude Pro Sonnet 4")
-st.sidebar.caption("Assist Engineer: Prof. Dr. Dr. Claude Pro Haiku 4.5")
-st.sidebar.caption("Technical Support: Streamlit (PyPack)")
+st.sidebar.caption("Produced by UTA")
+st.sidebar.caption("首席工程师: 克劳德专业十四行诗-4")
+st.sidebar.caption("协助工程师: 克劳德专业俳句-4.5")
+st.sidebar.caption("技术支持: Streamlit ")
