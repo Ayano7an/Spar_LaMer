@@ -1,7 +1,11 @@
-# Spar_LaMer
+# Wie funktioniert das?
+
+Stellen Sie bitte direkt zu mir ihre Frage, weil sie einfach ziemlich komplieziert zu nutzen ist.
+Disese Application ist vor allem wegen persönlicher Bedürfnisse entwicklt worden.
+
+Danke! 
+
+# Version
+1.50
 
 
-## Log
-
-23.09.25: Correct date error of weekly trending graph; Optimize subscription input; 
-22.09.25: First release version. 
